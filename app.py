@@ -8,7 +8,7 @@ from flask import Flask, jsonify
 app = Flask(__name__)
 
 SYMBOL = "BTCUSDT"
-BASE_URL = "https://api.binance.com/api/v3/klines"
+BASE_URL = "https://api.bybit.com/v5/market/kline"
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 RISK_BRL = 1.08
@@ -16,12 +16,32 @@ MAX_MINUTES = 5
 last_signal = None
 
 def candles(interval, limit=250):
-    r = requests.get(BASE_URL, params={"symbol": SYMBOL, "interval": interval, "limit": limit}, timeout=10)
+    interval_map = {"1m": "1", "5m": "5", "15m": "15"}
+    bybit_interval = interval_map[interval]
+    r = requests.get(
+        BASE_URL,
+        params={
+            "category": "linear",
+            "symbol": SYMBOL,
+            "interval": bybit_interval,
+            "limit": limit,
+        },
+        timeout=10,
+    )
     r.raise_for_status()
-    rows = r.json()
-    df = pd.DataFrame(rows, columns=["open_time","open","high","low","close","volume","close_time","qav","trades","tb_base","tb_quote","ignore"])
-    for c in ["open","high","low","close","volume"]:
+    payload = r.json()
+    if payload.get("retCode") != 0:
+        raise RuntimeError(f"Bybit API error: {payload.get('retMsg', 'unknown error')}")
+    rows = payload["result"]["list"]
+    df = pd.DataFrame(
+        rows,
+        columns=["open_time", "open", "high", "low", "close", "volume", "turnover"],
+    )
+    for c in ["open", "high", "low", "close", "volume"]:
         df[c] = pd.to_numeric(df[c])
+    df["open_time"] = pd.to_numeric(df["open_time"])
+    # Bybit returns newest first; indicators need oldest -> newest.
+    df = df.sort_values("open_time").reset_index(drop=True)
     return df
 
 def indicators(df):
